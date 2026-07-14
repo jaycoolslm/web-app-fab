@@ -25,6 +25,6 @@ if body=$(curl -fsS --max-time 10 "$URL/rest/v1/" -H "apikey: $KEY" -H "Authoriz
 else
   echo "[probe] ✗ could not reach $URL/rest/v1/"
   echo "        checklist: (a) is Supabase running on the host? (b) if the URL uses"
-  echo "        host.container.internal, did you create the DNS bridge? (c) key correct?"
+  echo "        host.container.internal, does the DNS bridge exist? (run: factory doctor)"
   exit 1
 fi

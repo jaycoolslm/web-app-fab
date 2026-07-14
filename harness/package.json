@@ -1,0 +1,6 @@
+{
+  "name": "factory-harness",
+  "private": true,
+  "type": "module",
+  "description": "Config-driven agent harness on Apple container micro-VMs; run via `npm run factory` from the repo root (deps resolve from the root node_modules)."
+}

@@ -1,0 +1,19 @@
+# Demo programme — two trivial sequential slices to smoke-test the harness end to end.
+name: demo
+
+# Deterministic checks run (in a container) after every GENERATE; a non-zero exit
+# loops back to the Generator as a finding without spending the Evaluator.
+asserts:
+  - label: hello-runs
+    command: test -f hello.py && python3 hello.py
+
+# Apps to boot for evaluation (none for this programme). Each runs in its own
+# container from the shared workspace; the Evaluator gets its URL.
+# apps:
+#   - label: web
+#     command: python3 -m http.server 3000
+#     port: 3000
+
+specs: # basenames under specs/, delivered strictly in order
+  - hello.md
+  - goodbye.md

@@ -15,6 +15,8 @@ import { readState, runProgramme, runsDir } from './pipeline.ts';
 import { listProgrammes, loadProgramme } from './programme.ts';
 
 const sh = (cmd: string, args: string[]): boolean => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
+/** `command -v <bin>` is a bash builtin, not always a standalone binary on PATH — run it through bash. */
+const onPath = (bin: string): boolean => sh('bash', ['-lc', `command -v ${bin}`]);
 
 function doctor(): number {
   let ok = true;
@@ -25,8 +27,8 @@ function doctor(): number {
       console.log(`  ${hard ? '✗' : '-'} ${label.padEnd(32)} fix: ${fix}`);
     }
   };
-  check(true, sh('command', ['-v', 'claude']), 'claude CLI on PATH', 'https://docs.claude.com/claude-code');
-  check(true, sh('command', ['-v', 'bash']), 'bash on PATH', 'install bash (on Windows: Git Bash or WSL)');
+  check(true, sh('bash', ['--version']), 'bash on PATH', 'install bash (on Windows: Git for Windows / Git Bash)');
+  check(true, onPath('claude'), 'claude CLI on PATH', 'https://docs.claude.com/claude-code');
   check(true, Boolean(authEnvName()), 'agent auth env', "export CLAUDE_CODE_OAUTH_TOKEN (from 'claude setup-token') or ANTHROPIC_API_KEY");
   console.log(ok ? '==> ready' : '==> fix the ✗ items above');
   return ok ? 0 : 1;

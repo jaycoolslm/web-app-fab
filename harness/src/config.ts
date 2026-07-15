@@ -1,12 +1,9 @@
 /**
- * Static policy: image, pass/timeout limits, and the model-tiering policy.
+ * Static policy: pass/timeout limits and the model-tiering policy.
  * Everything programme-specific lives in programmes/<name>.yaml, not here.
  */
 
 const int = (v: string | undefined, fallback: number): number => (v ? Number(v) : fallback);
-
-/** Agent image run in the Apple `container` micro-VM. */
-export const IMAGE: string = process.env.FACTORY_IMAGE ?? 'factory-agent:latest';
 
 /** Max generate→evaluate passes per slice before giving up. */
 export const MAX_PASSES: number = int(process.env.HARNESS_MAX_PASSES, 3);

@@ -1,26 +1,26 @@
 # Factory harness
 
-A config-driven TypeScript CLI (~750 lines, zero build step — Node 24 runs the TS directly) that delivers **programmes** through an autonomous pipeline, with every agent and every piece of generated code confined to Apple `container` micro-VMs. Per slice (one spec), each pass runs:
+A config-driven TypeScript CLI (~750 lines, zero build step — Node 24 runs the TS directly) that delivers **programmes** through an autonomous pipeline, running every agent, assert, and app as a direct host child process. There is no container layer — the host (or the disposable VM you run the harness in) is the safety boundary. Per slice (one spec), each pass runs:
 
 ```
 GENERATE → ASSERT → SMOKE → EVALUATE      (loop until PASS or HARNESS_MAX_PASSES)
 ```
 
-- **GENERATE** — the Generator agent builds the spec in the programme's shared workspace, inside a micro-VM. Default model on pass 1; cheaper fix model on later passes, auto-escalating back when a finding survives two passes.
-- **ASSERT** — deterministic, no model: the manifest's shell commands run in a container against the workspace. Any non-zero exit becomes a synthetic finding and loops straight back to GENERATE without spending the Evaluator.
-- **SMOKE** — boots every app the manifest declares, each in its own container; readiness is an HTTP response on its port. A crash or timeout becomes a synthetic finding (with the log tail) and loops.
-- **EVALUATE** — the adversarial agent drives the live apps by container-IP URL and writes `findings.json` — the verdict and the single source of truth.
+- **GENERATE** — the Generator agent builds the spec in the programme's shared workspace. Default model on pass 1; cheaper fix model on later passes, auto-escalating back when a finding survives two passes.
+- **ASSERT** — deterministic, no model: the manifest's shell commands run against the workspace. Any non-zero exit becomes a synthetic finding and loops straight back to GENERATE without spending the Evaluator.
+- **SMOKE** — boots every app the manifest declares as a detached process; readiness is an HTTP response on its port. A crash or timeout becomes a synthetic finding (with the log tail) and loops.
+- **EVALUATE** — the adversarial agent drives the live apps by `http://localhost:<port>` URL and writes `findings.json` — the verdict and the single source of truth.
 
 `findings.json` carries stable finding ids across passes: the Generator is told exactly what is still open, the Evaluator reuses ids for surviving issues, and repeat survivors trigger model escalation.
 
 ## Setup
 
 ```bash
-container system start                    # Apple container CLI (github.com/apple/container)
 export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"   # or ANTHROPIC_API_KEY
-npm run factory -- build                  # build the agent image
 npm run factory -- doctor                 # checks everything, prints fixes
 ```
+
+Requires the `claude` CLI and `bash` on your PATH (on Windows, Git Bash or WSL provides `bash`).
 
 ## Usage
 
@@ -32,7 +32,7 @@ npm run factory -- clean                  # delete all runs
 npm run factory:typecheck
 ```
 
-Environment knobs: `HARNESS_MODEL` (default `opus`), `HARNESS_FIX_MODEL` (`sonnet`), `HARNESS_MAX_PASSES` (`3`), `HARNESS_STAGE_TIMEOUT_S` (`1800`), `HARNESS_APP_READY_S` (`90`), `FACTORY_IMAGE`.
+Environment knobs: `HARNESS_MODEL` (default `opus`), `HARNESS_FIX_MODEL` (`sonnet`), `HARNESS_MAX_PASSES` (`3`), `HARNESS_STAGE_TIMEOUT_S` (`1800`), `HARNESS_APP_READY_S` (`90`).
 
 ## Programmes
 
@@ -70,12 +70,12 @@ runs/<programme>/
 ## Layout
 
 ```
-src/cli.ts        run | status | doctor | build | clean
+src/cli.ts        run | status | doctor | clean
 src/config.ts     model tiering + limits
 src/programme.ts  manifest loader
 src/pipeline.ts   the pass loop
 src/findings.ts   findings.json contract
-src/executor.ts   everything `container`: agent runs, shell asserts, app containers
+src/executor.ts   host child processes: agent runs, shell asserts, detached apps
 src/apps.ts       app boot / readiness / teardown
 prompts/          generator.md, evaluator.md
 programmes/       one manifest per programme

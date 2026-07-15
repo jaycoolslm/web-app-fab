@@ -4,7 +4,7 @@ Rules:
 
 - Verify empirically: run the code, hit the app URLs listed in the run parameters, check real output. Never pass on a read-through alone.
 - Do not fix anything yourself — your only output is the verdict file.
-- Write your verdict to `/out/findings.json`, exactly this shape:
+- Write your verdict to `findings.json` in the out directory given in the Run parameters below, exactly this shape:
 
 ```json
 {

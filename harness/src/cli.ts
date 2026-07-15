@@ -1,19 +1,18 @@
 /**
- * factory — config-driven agent harness on Apple `container` micro-VMs.
+ * factory — config-driven agent harness that runs each stage as a direct host process.
  *
  *   factory run <programme...>   deliver each programme's specs in order
  *   factory status               every slice's state across all programmes
  *   factory doctor               check requirements, print the fix for anything missing
- *   factory build [--no-cache]   (re)build the agent image
  *   factory clean                delete all runs
  */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { authEnvName, IMAGE } from './config.ts';
+import { authEnvName } from './config.ts';
 import { readState, runProgramme, runsDir } from './pipeline.ts';
-import { HARNESS_ROOT, listProgrammes, loadProgramme } from './programme.ts';
+import { listProgrammes, loadProgramme } from './programme.ts';
 
 const sh = (cmd: string, args: string[]): boolean => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 
@@ -26,20 +25,11 @@ function doctor(): number {
       console.log(`  ${hard ? '✗' : '-'} ${label.padEnd(32)} fix: ${fix}`);
     }
   };
-  check(true, sh('command', ['-v', 'container']), 'container CLI installed', 'https://github.com/apple/container');
-  check(true, sh('container', ['system', 'status']), 'container system running', 'container system start');
+  check(true, sh('command', ['-v', 'claude']), 'claude CLI on PATH', 'https://docs.claude.com/claude-code');
+  check(true, sh('command', ['-v', 'bash']), 'bash on PATH', 'install bash (on Windows: Git Bash or WSL)');
   check(true, Boolean(authEnvName()), 'agent auth env', "export CLAUDE_CODE_OAUTH_TOKEN (from 'claude setup-token') or ANTHROPIC_API_KEY");
-  check(false, sh('container', ['image', 'inspect', IMAGE]), `agent image built (${IMAGE})`, 'factory build');
   console.log(ok ? '==> ready' : '==> fix the ✗ items above');
   return ok ? 0 : 1;
-}
-
-function build(extra: string[]): number {
-  const args = [
-    'build', '--dns', process.env.CONTAINER_DNS ?? '8.8.8.8', ...extra,
-    '--tag', IMAGE, '--file', join(HARNESS_ROOT, 'image', 'Dockerfile'), join(HARNESS_ROOT, 'image'),
-  ];
-  return spawnSync('container', args, { stdio: 'inherit' }).status ?? 1;
 }
 
 function status(): void {
@@ -85,12 +75,11 @@ async function run(names: string[]): Promise<number> {
 const usage = (): void =>
   console.log(
     [
-      'factory — config-driven agent harness on Apple `container` micro-VMs',
+      'factory — config-driven agent harness that runs each stage as a direct host process',
       '',
       '  factory run <programme...>   deliver each programme\'s specs in order',
       '  factory status               every slice\'s state across all programmes',
       '  factory doctor               check requirements, print fixes',
-      '  factory build [--no-cache]   (re)build the agent image',
       '  factory clean                delete all runs',
     ].join('\n')
   );
@@ -105,9 +94,6 @@ switch (cmd) {
     break;
   case 'doctor':
     process.exitCode = doctor();
-    break;
-  case 'build':
-    process.exitCode = build(rest);
     break;
   case 'clean':
     rmSync(runsDir(), { recursive: true, force: true });

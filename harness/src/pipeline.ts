@@ -44,11 +44,12 @@ function writeState(state: SliceState): void {
 
 const prompt = (name: string): string => readFileSync(join(HARNESS_ROOT, 'prompts', `${name}.md`), 'utf8');
 
-function paramsBlock(opts: { pass: number; spec: string; appLines: string[]; previous?: FindingsFile }): string {
+function paramsBlock(opts: { pass: number; spec: string; outDir: string; appLines: string[]; previous?: FindingsFile }): string {
   return [
     '\n\n## Run parameters (from the harness)\n',
     `- Pass: ${opts.pass} of ${MAX_PASSES}`,
-    `- Workspace: /workspace (your current directory)`,
+    `- Workspace: your current directory`,
+    `- Out directory: ${opts.outDir}`,
     opts.appLines.length
       ? `- Apps running (drive ALL of them):\n${opts.appLines.map((l) => `  - ${l}`).join('\n')}`
       : undefined,
@@ -99,7 +100,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
     const model = resolveGenerateModel(pass, history);
     console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: GENERATE (${model})`);
     const gen = await runAgent({
-      prompt: prompt('generator') + paramsBlock({ pass, spec, appLines: [], previous }),
+      prompt: prompt('generator') + paramsBlock({ pass, spec, outDir: dir, appLines: [], previous }),
       model,
       workspace,
       outDir: dir,
@@ -135,11 +136,11 @@ export async function runSlice(programme: Programme, specPath: string, workspace
         continue;
       }
 
-      // EVALUATE — the adversarial pass; writes /out/findings.json (the verdict).
+      // EVALUATE — the adversarial pass; writes findings.json (the verdict).
       console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: EVALUATE (${DEFAULT_MODEL})`);
       const appLines = apps.running.map((a) => `${a.label}: ${a.url}`);
       const evalRes = await runAgent({
-        prompt: prompt('evaluator') + paramsBlock({ pass, spec, appLines, previous }),
+        prompt: prompt('evaluator') + paramsBlock({ pass, spec, outDir: dir, appLines, previous }),
         model: DEFAULT_MODEL,
         workspace,
         outDir: dir,
@@ -148,7 +149,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
       });
       const written = readFindings(join(dir, 'findings.json'));
       if (evalRes.isError || !written) {
-        const why = evalRes.isError ? evalRes.result : 'no valid /out/findings.json written';
+        const why = evalRes.isError ? evalRes.result : 'no valid findings.json written';
         console.log(`[${slug}]   evaluator failed: ${why.slice(0, 200)}`);
         if (finish('evaluate', 'FAIL', [syntheticFinding('Evaluator failed', why)])) return state;
         continue;

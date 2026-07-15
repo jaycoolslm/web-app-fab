@@ -10,7 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { authEnvName } from './config.ts';
+import { hasAuthEnvVar } from './config.ts';
 import { readState, runProgramme, runsDir } from './pipeline.ts';
 import { listProgrammes, loadProgramme } from './programme.ts';
 
@@ -29,7 +29,12 @@ function doctor(): number {
   };
   check(true, sh('bash', ['--version']), 'bash on PATH', 'install bash (on Windows: Git for Windows / Git Bash)');
   check(true, onPath('claude'), 'claude CLI on PATH', 'https://docs.claude.com/claude-code');
-  check(true, Boolean(authEnvName()), 'agent auth env', "export CLAUDE_CODE_OAUTH_TOKEN (from 'claude setup-token') or ANTHROPIC_API_KEY");
+  check(
+    false,
+    hasAuthEnvVar(),
+    'auth env var set',
+    "optional — 'claude login' works fine too; export CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY only if you want key-based auth"
+  );
   console.log(ok ? '==> ready' : '==> fix the ✗ items above');
   return ok ? 0 : 1;
 }
@@ -58,10 +63,6 @@ function status(): void {
 async function run(names: string[]): Promise<number> {
   if (names.length === 0) {
     console.error(`usage: factory run <programme...> — known: ${listProgrammes().join(', ') || '(none)'}`);
-    return 1;
-  }
-  if (!authEnvName()) {
-    console.error("error: export CLAUDE_CODE_OAUTH_TOKEN (from 'claude setup-token') or ANTHROPIC_API_KEY");
     return 1;
   }
   const programmes = names.map(loadProgramme); // fail fast on any bad manifest

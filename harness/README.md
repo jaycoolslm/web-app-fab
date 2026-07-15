@@ -16,11 +16,12 @@ GENERATE → ASSERT → SMOKE → EVALUATE      (loop until PASS or HARNESS_MAX_
 ## Setup
 
 ```bash
-export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"   # or ANTHROPIC_API_KEY
 npm run factory -- doctor                 # checks everything, prints fixes
 ```
 
-Requires the `claude` CLI and `bash` on your PATH (on Windows, Git Bash or WSL provides `bash`).
+Requires the `claude` CLI and `bash` on your PATH (on Windows, Git Bash or WSL provides `bash`). `claude` picks up
+whatever session `claude login` already set up — no token export needed. If you'd rather use key-based auth instead,
+`export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"` or `ANTHROPIC_API_KEY` both work too.
 
 ## Usage
 

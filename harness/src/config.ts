@@ -20,11 +20,12 @@ export const DEFAULT_MODEL: string = process.env.HARNESS_MODEL ?? 'opus';
 /** Cheaper model for Generator fix passes (pass ≥ 2). */
 export const FIX_MODEL: string = process.env.HARNESS_FIX_MODEL ?? 'sonnet';
 
-/** Auth env var to forward into agent containers, or undefined if none is set. */
-export function authEnvName(): string | undefined {
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return 'CLAUDE_CODE_OAUTH_TOKEN';
-  if (process.env.ANTHROPIC_API_KEY) return 'ANTHROPIC_API_KEY';
-  return undefined;
+/**
+ * Whether an API-key-style auth env var is set. Optional: `claude` also works off a local
+ * `claude login` session with neither of these set, since it runs as a direct host process now.
+ */
+export function hasAuthEnvVar(): boolean {
+  return Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
 }
 
 /**

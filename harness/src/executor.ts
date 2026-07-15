@@ -9,7 +9,6 @@ import { spawn } from 'node:child_process';
 import { createWriteStream, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { authEnvName } from './config.ts';
 
 let seq = 0;
 export const uniqueName = (kind: string): string => `harness-${kind}-${process.pid}-${++seq}`;
@@ -88,8 +87,6 @@ export interface AgentRequest {
 
 /** Run one agent stage as a host process, teeing the full agentic trace to disk. */
 export async function runAgent(req: AgentRequest): Promise<AgentResult> {
-  const auth = authEnvName();
-  if (!auth) return { isError: true, result: 'no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the environment' };
   const trace = createWriteStream(req.tracePath);
   let final: { is_error?: boolean; result?: string; total_cost_usd?: number; num_turns?: number } | undefined;
 

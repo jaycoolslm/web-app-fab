@@ -186,6 +186,128 @@ describe("tenant isolation", () => {
     assert.equal(stillOpen.status, "triage");
   });
 
+  // -------------------------------------------------------------------------
+  // The board's write path. Dropping a card calls an `update` that is scoped by
+  // id alone — no team filter — so these tests are what stands between one
+  // team's board and another team's incidents.
+  // -------------------------------------------------------------------------
+
+  it("a user cannot change the status of another team's incident by id", async () => {
+    // Every column, not just one: the drop handler will happily send any of the
+    // four, and a policy that leaked on one of them would leak on all.
+    for (const status of ["triage", "investigating", "mitigating", "resolved"]) {
+      const { data, error } = await bob.client
+        .from("incidents")
+        .update({ status })
+        .eq("id", aliceIncident.id)
+        .select("id, status");
+
+      assert.equal(error, null, error?.message);
+      assert.deepEqual(
+        data,
+        [],
+        `setting status=${status} on another team's incident must match no rows`,
+      );
+    }
+
+    // Handing over the exact id and the owning team's id together must not help
+    // either — `using` is evaluated against the row as it stands.
+    const spoofed = await bob.client
+      .from("incidents")
+      .update({ status: "resolved", team_id: alice.teamId })
+      .eq("id", aliceIncident.id)
+      .select("id");
+    assert.ok(
+      spoofed.error !== null ||
+        (Array.isArray(spoofed.data) && spoofed.data.length === 0),
+      "naming the owning team must not unlock the row",
+    );
+
+    // The owning team sees it exactly as it was: same column, and `updated_at`
+    // untouched, which proves no row was written and rolled back by a check.
+    const { data: owner, error: ownerError } = await alice.client
+      .from("incidents")
+      .select("status, severity, updated_at")
+      .eq("id", aliceIncident.id)
+      .single();
+    assert.equal(ownerError, null, ownerError?.message);
+    assert.equal(owner.status, aliceIncident.status);
+    assert.equal(owner.severity, aliceIncident.severity);
+    assert.equal(
+      owner.updated_at,
+      aliceIncident.updated_at,
+      "the row must not have been touched at all",
+    );
+  });
+
+  it("a user moves their own incident through every column", async () => {
+    // A dedicated incident, so the assertions above about Alice's original one
+    // keep holding whatever order the suite runs in.
+    const card = await raiseIncident(alice, "Alice DNS resolver timing out", "P2");
+    assert.equal(card.status, "triage", "incidents start in the triage column");
+
+    for (const status of ["investigating", "mitigating", "resolved", "triage"]) {
+      const { data, error } = await alice.client
+        .from("incidents")
+        .update({ status })
+        .eq("id", card.id)
+        .select("id, status");
+
+      assert.equal(error, null, `moving to ${status} failed: ${error?.message}`);
+      assert.deepEqual(data, [{ id: card.id, status }]);
+
+      // Read it back on a fresh request, which is what a page reload does.
+      const { data: persisted } = await alice.client
+        .from("incidents")
+        .select("status")
+        .eq("id", card.id)
+        .single();
+      assert.equal(persisted.status, status, `${status} did not persist`);
+    }
+
+    // And none of that moving about made it visible to the other team.
+    const { data: bobSees } = await bob.client
+      .from("incidents")
+      .select("id")
+      .eq("id", card.id);
+    assert.deepEqual(bobSees, []);
+  });
+
+  it("an unauthenticated client cannot move an incident", async () => {
+    const anon = freshClient();
+    const { data, error } = await anon
+      .from("incidents")
+      .update({ status: "resolved" })
+      .eq("id", aliceIncident.id)
+      .select("id");
+
+    assert.ok(
+      error !== null || (Array.isArray(data) && data.length === 0),
+      "a signed-out client must not be able to move anything",
+    );
+
+    const { data: owner } = await alice.client
+      .from("incidents")
+      .select("status")
+      .eq("id", aliceIncident.id)
+      .single();
+    assert.equal(owner.status, aliceIncident.status);
+  });
+
+  it("the database constrains the status a card can be dropped into", async () => {
+    const { error } = await alice.client
+      .from("incidents")
+      .update({ status: "postmortem" })
+      .eq("id", aliceIncident.id)
+      .select("id");
+
+    assert.notEqual(
+      error,
+      null,
+      "an unknown column must be rejected by the database, not just the UI",
+    );
+  });
+
   it("an unauthenticated client reads nothing", async () => {
     const anon = freshClient();
 

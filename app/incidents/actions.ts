@@ -9,7 +9,7 @@ import {
   isStatus,
   type CreateIncidentState,
 } from "@/lib/incidents";
-import { getViewerTeam } from "./data";
+import { getViewerTeam } from "@/lib/team";
 
 export async function createIncident(
   previous: CreateIncidentState,

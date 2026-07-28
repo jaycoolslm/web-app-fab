@@ -1,9 +1,9 @@
 import { DeskShell } from "@/components/desk-shell";
 
-export default function IncidentsLayout({
+export default function BoardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <DeskShell current="/incidents">{children}</DeskShell>;
+  return <DeskShell current="/board">{children}</DeskShell>;
 }

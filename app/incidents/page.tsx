@@ -11,8 +11,8 @@ import {
   STATUS_LABELS,
   type Incident,
 } from "@/lib/incidents";
+import { getViewerTeam } from "@/lib/team";
 import { cn } from "@/lib/utils";
-import { getViewerTeam } from "./data";
 
 function formatWhen(iso: string) {
   return new Date(iso).toLocaleString("en-GB", {
@@ -54,13 +54,22 @@ async function IncidentsBoard() {
 
   return (
     <>
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">Incidents</h1>
-        <p className="text-sm text-muted-foreground">
-          Everything open and closed for{" "}
-          <span className="font-medium">{team.name}</span>, highest severity
-          first.
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold">Incidents</h1>
+          <p className="text-sm text-muted-foreground">
+            Everything open and closed for{" "}
+            <span className="font-medium">{team.name}</span>, highest severity
+            first.
+          </p>
+        </div>
+        <Link
+          href="/board"
+          className="rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent"
+          data-testid="incidents-to-board-link"
+        >
+          Open the board
+        </Link>
       </header>
 
       <IncidentCreateForm />

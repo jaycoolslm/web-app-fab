@@ -44,6 +44,7 @@ export type Incident = {
   description: string;
   severity: Severity;
   status: IncidentStatus;
+  assignee_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -53,6 +54,32 @@ export type Team = {
   id: string;
   name: string;
 };
+
+/**
+ * A member of the viewer's own team, as read from the `team_directory` view.
+ * The view is `security_invoker`, so this can only ever describe teammates.
+ */
+export type TeamMember = {
+  user_id: string;
+  display_name: string;
+  email: string | null;
+};
+
+/** What the UI says where a name would go and there is nobody to name. */
+export const UNASSIGNED_LABEL = "Unassigned";
+
+/**
+ * The name to show for an assignee. `people` is the viewer's own team, so a
+ * miss means the assignee is no longer on it — which the composite foreign key
+ * makes transient, but a page rendered mid-change should still say something.
+ */
+export function assigneeName(
+  assigneeId: string | null,
+  people: Map<string, TeamMember>,
+): string | null {
+  if (!assigneeId) return null;
+  return people.get(assigneeId)?.display_name ?? "Someone on your team";
+}
 
 /**
  * Form state for the create action. It lives here rather than beside the
@@ -115,7 +142,7 @@ export function severityRank(severity: Severity): number {
 /** The subset of an incident a board card needs. */
 export type BoardCard = Pick<
   Incident,
-  "id" | "title" | "severity" | "status" | "created_at"
+  "id" | "title" | "severity" | "status" | "assignee_id" | "created_at"
 >;
 
 /**
@@ -146,3 +173,93 @@ export function nextStatus(status: IncidentStatus): IncidentStatus | null {
 export type MoveIncidentResult =
   | { ok: true; status: IncidentStatus }
   | { ok: false; error: string };
+
+/** Same contract for the assignment picker: a refusal is a value with a reason. */
+export type AssignIncidentResult =
+  | { ok: true; assigneeId: string | null }
+  | { ok: false; error: string };
+
+// ---------------------------------------------------------------------------
+// Activity trail
+// ---------------------------------------------------------------------------
+
+export const EVENT_KINDS = [
+  "raised",
+  "status_changed",
+  "assignment_changed",
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
+
+/**
+ * One row of `incident_events`. The `*_name` fields are captured by the trigger
+ * at write time, so a trail entry still reads correctly after the person it
+ * names has left the team.
+ */
+export type IncidentEvent = {
+  id: string;
+  seq: number;
+  incident_id: string;
+  kind: EventKind;
+  actor_id: string | null;
+  actor_name: string;
+  from_status: IncidentStatus | null;
+  to_status: IncidentStatus | null;
+  from_assignee_id: string | null;
+  from_assignee_name: string | null;
+  to_assignee_id: string | null;
+  to_assignee_name: string | null;
+  created_at: string;
+};
+
+/**
+ * The trail entry as a sentence. Deliberately not a field-by-field diff: the
+ * point of the trail is that somebody skimming it understands what happened
+ * without decoding it.
+ *
+ * `viewerId` turns the reader's own actions into "You", which is how people
+ * actually read a shared log.
+ */
+export function describeEvent(
+  event: IncidentEvent,
+  viewerId: string | null,
+): string {
+  const isViewer = viewerId !== null && event.actor_id === viewerId;
+  const who = isViewer ? "You" : event.actor_name;
+
+  switch (event.kind) {
+    case "raised": {
+      const status = event.to_status ? STATUS_LABELS[event.to_status] : "Triage";
+      const assigned = event.to_assignee_name
+        ? `, assigned to ${namePart(event.to_assignee_name, event.to_assignee_id, viewerId)}`
+        : "";
+      return `${who} raised this in ${status}${assigned}`;
+    }
+    case "status_changed": {
+      const from = event.from_status ? STATUS_LABELS[event.from_status] : "—";
+      const to = event.to_status ? STATUS_LABELS[event.to_status] : "—";
+      return `${who} moved this from ${from} to ${to}`;
+    }
+    case "assignment_changed": {
+      const to = event.to_assignee_name
+        ? namePart(event.to_assignee_name, event.to_assignee_id, viewerId)
+        : null;
+      const from = event.from_assignee_name
+        ? namePart(event.from_assignee_name, event.from_assignee_id, viewerId)
+        : null;
+
+      if (to && from) return `${who} reassigned this from ${from} to ${to}`;
+      if (to) return `${who} assigned this to ${to}`;
+      if (from) return `${who} unassigned this from ${from}`;
+      return `${who} changed the assignment`;
+    }
+  }
+}
+
+/** "you" rather than your own name, when the trail is talking about the reader. */
+function namePart(
+  name: string,
+  userId: string | null,
+  viewerId: string | null,
+): string {
+  return viewerId !== null && userId === viewerId ? "you" : name;
+}

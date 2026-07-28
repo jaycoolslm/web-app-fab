@@ -1,6 +1,6 @@
 "use server";
 
-import { refresh } from "next/cache";
+import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
@@ -65,6 +65,12 @@ export async function moveIncident(
     return { ok: false, error: "that incident is not yours to move." };
   }
 
+  // `refresh` settles the board the card was dragged on; the list and the
+  // incident's own page show the status too, and both may be sitting in the
+  // client router cache from before the move.
   refresh();
+  revalidatePath("/incidents");
+  revalidatePath(`/incidents/${incidentId}`);
+
   return { ok: true, status };
 }

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { moveIncident } from "@/app/board/actions";
 import { Badge } from "@/components/ui/badge";
 import {
+  assigneeName,
   compareForBoard,
   nextStatus,
   previousStatus,
@@ -14,8 +15,10 @@ import {
   STATUS_ACCENT_CLASS,
   STATUS_LABELS,
   STATUSES,
+  UNASSIGNED_LABEL,
   type BoardCard,
   type IncidentStatus,
+  type TeamMember,
 } from "@/lib/incidents";
 import { cn } from "@/lib/utils";
 
@@ -48,9 +51,15 @@ type DragState = {
 export function IncidentBoard({
   incidents,
   teamName,
+  people,
+  detailQuery,
 }: {
   incidents: BoardCard[];
   teamName: string;
+  /** The viewer's own team, for putting a name to each card's assignee. */
+  people: TeamMember[];
+  /** The current filter, carried into a card's detail link as `?from=`. */
+  detailQuery: string;
 }) {
   /**
    * Optimistic layer over the server's data rather than a copy of it. An entry
@@ -122,6 +131,19 @@ export function IncidentBoard({
   const cardsById = useMemo(
     () => new Map(cards.map((card) => [card.id, card])),
     [cards],
+  );
+
+  const peopleById = useMemo(
+    () => new Map(people.map((person) => [person.user_id, person])),
+    [people],
+  );
+
+  const detailHref = useCallback(
+    (id: string) =>
+      detailQuery
+        ? `/incidents/${id}?from=${encodeURIComponent(detailQuery)}`
+        : `/incidents/${id}`,
+    [detailQuery],
   );
 
   const commitMove = useCallback(
@@ -405,6 +427,8 @@ export function IncidentBoard({
                     <BoardCardItem
                       key={card.id}
                       card={card}
+                      holder={assigneeName(card.assignee_id, peopleById)}
+                      href={detailHref(card.id)}
                       isDragging={drag?.cardId === card.id && drag.moved}
                       isPending={pending[card.id] === true}
                       onPointerDown={onCardPointerDown}
@@ -437,7 +461,11 @@ export function IncidentBoard({
           data-testid="board-drag-ghost"
           aria-hidden="true"
         >
-          <CardFace card={draggingCard} className="rotate-2 shadow-xl" />
+          <CardFace
+            card={draggingCard}
+            holder={assigneeName(draggingCard.assignee_id, peopleById)}
+            className="rotate-2 shadow-xl"
+          />
         </div>
       )}
     </div>
@@ -447,9 +475,11 @@ export function IncidentBoard({
 /** The visual card, shared by the real card and the drag ghost. */
 function CardFace({
   card,
+  holder,
   className,
 }: {
   card: BoardCard;
+  holder: string | null;
   className?: string;
 }) {
   return (
@@ -470,12 +500,39 @@ function CardFace({
           {card.severity}
         </Badge>
       </div>
+      <AssigneeLine holder={holder} />
     </div>
+  );
+}
+
+/** Who is holding the card, said plainly either way. */
+function AssigneeLine({
+  holder,
+  testId,
+  assigneeId,
+}: {
+  holder: string | null;
+  testId?: string;
+  assigneeId?: string | null;
+}) {
+  return (
+    <p
+      className={cn(
+        "mt-1.5 text-[11px]",
+        holder ? "text-muted-foreground" : "italic text-muted-foreground/70",
+      )}
+      data-testid={testId}
+      data-assignee={assigneeId ?? "unassigned"}
+    >
+      {holder ?? UNASSIGNED_LABEL}
+    </p>
   );
 }
 
 function BoardCardItem({
   card,
+  holder,
+  href,
   isDragging,
   isPending,
   onPointerDown,
@@ -483,6 +540,8 @@ function BoardCardItem({
   onMove,
 }: {
   card: BoardCard;
+  holder: string | null;
+  href: string;
   isDragging: boolean;
   isPending: boolean;
   onPointerDown: (
@@ -512,6 +571,7 @@ function BoardCardItem({
         data-incident-id={card.id}
         data-status={card.status}
         data-severity={card.severity}
+        data-assignee={card.assignee_id ?? "unassigned"}
         data-pending={isPending ? "true" : undefined}
         // touch-action:none keeps a touch drag from turning into a page scroll.
         className={cn(
@@ -525,7 +585,7 @@ function BoardCardItem({
       >
         <div className="flex items-start justify-between gap-2">
           <Link
-            href={`/incidents/${card.id}`}
+            href={href}
             draggable={false}
             className="text-sm font-medium leading-snug hover:underline"
             data-testid={`board-card-link-${card.id}`}
@@ -539,6 +599,12 @@ function BoardCardItem({
             {card.severity}
           </Badge>
         </div>
+
+        <AssigneeLine
+          holder={holder}
+          assigneeId={card.assignee_id}
+          testId={`board-card-assignee-${card.id}`}
+        />
 
         {/*
           The keyboard and screen-reader route to the same move the drag makes.

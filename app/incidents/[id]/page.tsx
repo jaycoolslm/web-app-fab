@@ -2,8 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { ActivityTrail } from "@/components/activity-trail";
+import { AssigneePicker } from "@/components/assignee-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { loadTeamMembers } from "@/lib/desk";
+import { listHrefFromRawQuery } from "@/lib/filters";
 import { createClient } from "@/lib/supabase/server";
 import {
   SEVERITY_CHIP_CLASS,
@@ -11,6 +15,7 @@ import {
   STATUS_CHIP_CLASS,
   STATUS_LABELS,
   type Incident,
+  type IncidentEvent,
 } from "@/lib/incidents";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +26,7 @@ function formatWhen(iso: string) {
   });
 }
 
-async function IncidentDetail({ params }: { params: Promise<{ id: string }> }) {
+async function IncidentDetail({ params }: Pick<PageProps<"/incidents/[id]">, "params">) {
   const { id } = await params;
   const supabase = await createClient();
 
@@ -40,6 +45,25 @@ async function IncidentDetail({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const incident = data;
+
+  const [viewer, people, trail] = await Promise.all([
+    supabase.auth.getUser().then((result) => result.data.user),
+    // The incident's own team, which RLS has already established is the
+    // viewer's. Reading it off the row rather than off the session means the
+    // picker cannot offer somebody the database would then refuse.
+    loadTeamMembers(incident.team_id),
+    // Same story for the trail: `incident_id` alone, with the policy on
+    // `incident_events` deciding whether any rows come back. `seq` rather than
+    // `created_at`, because a status change and a reassignment made in one
+    // statement share a timestamp.
+    supabase
+      .from("incident_events")
+      .select("*")
+      .eq("incident_id", incident.id)
+      .order("seq", { ascending: false }),
+  ]);
+
+  const events = (trail.data ?? []) as IncidentEvent[];
 
   return (
     <Card data-testid="incident-detail">
@@ -76,6 +100,13 @@ async function IncidentDetail({ params }: { params: Promise<{ id: string }> }) {
           </p>
         </div>
 
+        <AssigneePicker
+          incidentId={incident.id}
+          assigneeId={incident.assignee_id}
+          people={people}
+          viewerId={viewer?.id ?? null}
+        />
+
         <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted-foreground">Raised</dt>
@@ -90,26 +121,55 @@ async function IncidentDetail({ params }: { params: Promise<{ id: string }> }) {
             </dd>
           </div>
         </dl>
+
+        <ActivityTrail
+          events={events}
+          viewerId={viewer?.id ?? null}
+          error={trail.error?.message ?? null}
+        />
       </CardContent>
     </Card>
   );
 }
 
+/**
+ * The link back to the list. `?from=` carries the filter that was in force when
+ * the incident was opened; it is untrusted text, so it is parsed back into a
+ * filter and re-serialised rather than pasted onto the path.
+ */
+async function BackLink({
+  searchParams,
+}: Pick<PageProps<"/incidents/[id]">, "searchParams">) {
+  const { from } = await searchParams;
+  const href = listHrefFromRawQuery(Array.isArray(from) ? from[0] : from);
+
+  return (
+    <Link
+      href={href}
+      className="text-sm text-muted-foreground hover:underline"
+      data-testid="back-to-incidents"
+    >
+      ← All incidents
+    </Link>
+  );
+}
+
 export default function IncidentDetailPage({
   params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+  searchParams,
+}: PageProps<"/incidents/[id]">) {
   return (
     <>
       <div>
-        <Link
-          href="/incidents"
-          className="text-sm text-muted-foreground hover:underline"
-          data-testid="back-to-incidents"
+        <Suspense
+          fallback={
+            <span className="text-sm text-muted-foreground">
+              ← All incidents
+            </span>
+          }
         >
-          ← All incidents
-        </Link>
+          <BackLink searchParams={searchParams} />
+        </Suspense>
       </div>
 
       <Suspense

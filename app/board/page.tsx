@@ -2,7 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { IncidentBoard } from "@/components/incident-board";
+import { IncidentFilters } from "@/components/incident-filters";
 import { Card, CardContent } from "@/components/ui/card";
+import { loadDeskIncidents, loadTeamMembers } from "@/lib/desk";
+import { filtersToSuffix, parseFilters } from "@/lib/filters";
 import { STATUS_LABELS, STATUSES, type BoardCard } from "@/lib/incidents";
 import { createClient } from "@/lib/supabase/server";
 import { getViewerTeam } from "@/lib/team";
@@ -11,7 +14,10 @@ export const metadata = {
   title: "Board — Incident desk",
 };
 
-async function Board() {
+async function Board({
+  searchParams,
+}: Pick<PageProps<"/board">, "searchParams">) {
+  const filters = parseFilters(await searchParams);
   const team = await getViewerTeam();
 
   if (!team) {
@@ -29,26 +35,27 @@ async function Board() {
   }
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  // Row level security already limits this table to the caller's team; the
-  // filter says *which* team we are looking at, it is not what keeps other
-  // teams out. P1 first, then newest first within a severity — the same order
-  // the board keeps within each column.
-  const { data, error } = await supabase
-    .from("incidents")
-    .select("id,title,severity,status,created_at")
-    .eq("team_id", team.id)
-    .order("severity", { ascending: true })
-    .order("created_at", { ascending: false });
+  const [{ rows: incidents, total, error }, people] = await Promise.all([
+    loadDeskIncidents<BoardCard>(
+      "id,title,severity,status,assignee_id,created_at",
+      team.id,
+      filters,
+    ),
+    loadTeamMembers(team.id),
+  ]);
 
-  const incidents = (data ?? []) as BoardCard[];
+  const suffix = filtersToSuffix(filters);
 
   return (
     <>
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">Board</h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground" data-testid="board-summary">
             {incidents.length}{" "}
             {incidents.length === 1 ? "incident" : "incidents"} for{" "}
             <span className="font-medium">{team.name}</span> across{" "}
@@ -56,7 +63,7 @@ async function Board() {
           </p>
         </div>
         <Link
-          href="/incidents"
+          href={`/incidents${suffix}`}
           className="text-sm text-muted-foreground underline-offset-4 hover:underline"
           data-testid="board-to-list-link"
         >
@@ -64,13 +71,31 @@ async function Board() {
         </Link>
       </header>
 
+      <IncidentFilters
+        basePath="/board"
+        filters={filters}
+        people={people}
+        viewerId={user?.id ?? null}
+        shown={incidents.length}
+        total={total}
+      />
+
       {error && (
         <p className="text-sm text-red-500" data-testid="board-error">
-          Could not load the board: {error.message}
+          Could not load the board: {error}
         </p>
       )}
 
-      <IncidentBoard incidents={incidents} teamName={team.name} />
+      <IncidentBoard
+        incidents={incidents}
+        teamName={team.name}
+        people={people}
+        detailQuery={suffix.slice(1)}
+        // Rebuilt from scratch when the filter changes, so no optimistic move
+        // from the previous view survives into a set of cards it no longer
+        // describes.
+        key={suffix}
+      />
     </>
   );
 }
@@ -92,12 +117,12 @@ function BoardSkeleton() {
   );
 }
 
-export default function BoardPage() {
-  // Everything below reads cookies to identify the caller, so it streams in
-  // behind a Suspense boundary.
+export default function BoardPage({ searchParams }: PageProps<"/board">) {
+  // Everything below reads cookies and the query string to decide what to show,
+  // so it streams in behind a Suspense boundary rather than blocking the shell.
   return (
     <Suspense fallback={<BoardSkeleton />}>
-      <Board />
+      <Board searchParams={searchParams} />
     </Suspense>
   );
 }

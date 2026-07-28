@@ -1,0 +1,14 @@
+{
+  "slug": "incident-desk-foundation",
+  "programme": "incident-desk",
+  "status": "passed",
+  "passCount": 1,
+  "verdicts": [
+    {
+      "pass": 1,
+      "verdict": "PASS",
+      "stage": "evaluate",
+      "openFindingIds": []
+    }
+  ]
+}

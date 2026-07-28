@@ -1,0 +1,13 @@
+{
+  "pass": 2,
+  "verdict": "PASS",
+  "findings": [
+    {
+      "id": "env-93a3bde98c",
+      "severity": "critical",
+      "summary": "Generator failed",
+      "detail": "Resolved. The pass-1 generate stage timed out at 1800s, but its work was committed (e5ebd78) and is complete: migration 20260728143000_incident_desk_assignment.sql (profiles, team_directory, incidents.assignee_id with a composite FK into team_members, incident_events + trigger + RLS), lib/filters.ts, components/{incident-filters,assignee-picker,activity-trail}.tsx, and 5 new isolation tests. Verified empirically this pass: `npx tsc --noEmit` clean, `npm run build` succeeds, `npm run test:isolation` 20/20 pass, and all four acceptance criteria drove green through the running app at http://localhost:3000.",
+      "status": "fixed"
+    }
+  ]
+}

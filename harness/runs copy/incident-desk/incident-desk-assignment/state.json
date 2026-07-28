@@ -1,0 +1,22 @@
+{
+  "slug": "incident-desk-assignment",
+  "programme": "incident-desk",
+  "status": "passed",
+  "passCount": 2,
+  "verdicts": [
+    {
+      "pass": 1,
+      "verdict": "FAIL",
+      "stage": "generate",
+      "openFindingIds": [
+        "env-93a3bde98c"
+      ]
+    },
+    {
+      "pass": 2,
+      "verdict": "PASS",
+      "stage": "evaluate",
+      "openFindingIds": []
+    }
+  ]
+}

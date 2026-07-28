@@ -1,0 +1,13 @@
+{
+  "pass": 1,
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "id": "env-93a3bde98c",
+      "severity": "critical",
+      "summary": "Generator failed",
+      "detail": "stage timed out after 1800s",
+      "status": "open"
+    }
+  ]
+}

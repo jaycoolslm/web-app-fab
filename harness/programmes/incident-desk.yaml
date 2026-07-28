@@ -1,0 +1,26 @@
+# NOC incident desk — a multi-tenant internal tool grown over three sequential slices on one
+# branch: foundation (auth + schema + RLS + list) → kanban board → assignment and filters.
+#
+# The point of this programme is that its hardest correctness property — a team can never see
+# another team's incidents — is invisible to a compiler, a linter and a read of the diff. It is
+# only decidable by driving two authenticated browser sessions, which is the Evaluator's job.
+name: incident-desk
+
+# Deterministic invariants, checked after every GENERATE before the Evaluator is ever spent.
+# These are the cheap, fast feedback loop: anything caught here loops straight back to the
+# Generator with a concrete error instead of costing an Evaluator run.
+asserts:
+  - label: build
+    command: npm run build
+
+  # The isolation property, checked programmatically. The Generator writes this suite itself
+  # (see the specs) so it can never drift from the schema it chose. This does not replace the
+  # Evaluator's browser verification — it front-runs it, so that by the time a human-like
+  # browser session is spent, the crude isolation failures are already gone.
+  - label: isolation-tests
+    command: npm run test:isolation
+
+specs: # basenames under specs/, delivered strictly in order
+  - incident-desk-foundation.md
+  - incident-desk-board.md
+  - incident-desk-assignment.md

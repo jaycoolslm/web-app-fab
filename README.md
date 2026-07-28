@@ -28,7 +28,7 @@ npm run dev
 
 # Agent harness
 
-`harness/` is a config-driven TypeScript CLI that delivers **programmes** (ordered specs in a YAML manifest) through an autonomous generate → assert → smoke → evaluate loop, with every agent and all generated code confined to Apple `container` micro-VMs. See [harness/README.md](harness/README.md).
+`harness/` is a config-driven TypeScript CLI that delivers **programmes** (ordered specs in a YAML manifest) through an autonomous generate → assert → smoke → evaluate loop. Each programme builds on its own `factory/<name>` branch of this repo, one commit per pass. See [harness/README.md](harness/README.md).
 
 ```bash
 npm run factory -- doctor           # check requirements (prints fixes)

@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useHydrated } from "@/lib/use-hydrated";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,14 +21,20 @@ export function LoginForm({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<"div">) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const hydrated = useHydrated();
   const router = useRouter();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // The fields are uncontrolled and read from FormData on submit. Controlled
+  // inputs would discard anything typed before hydration, which is a real
+  // race for fast typists and for anything automating the browser.
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+
     const supabase = createClient();
     setIsLoading(true);
     setError(null);
@@ -38,8 +45,8 @@ export function LoginForm({
         password,
       });
       if (error) throw error;
-      // Update this route to redirect to an authenticated route. The user already has an active session.
-      router.push("/protected");
+      router.push("/incidents");
+      router.refresh();
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {
@@ -63,11 +70,11 @@ export function LoginForm({
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
+                  name="email"
                   type="email"
                   placeholder="m@example.com"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  data-testid="login-email"
                 />
               </div>
               <div className="grid gap-2">
@@ -82,14 +89,23 @@ export function LoginForm({
                 </div>
                 <Input
                   id="password"
+                  name="password"
                   type="password"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  data-testid="login-password"
                 />
               </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <Button type="submit" className="w-full" disabled={isLoading}>
+              {error && (
+                <p className="text-sm text-red-500" data-testid="login-error">
+                  {error}
+                </p>
+              )}
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={isLoading || !hydrated}
+                data-testid="login-submit"
+              >
                 {isLoading ? "Logging in..." : "Login"}
               </Button>
             </div>

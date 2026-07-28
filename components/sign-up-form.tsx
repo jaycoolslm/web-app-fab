@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useHydrated } from "@/lib/use-hydrated";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,35 +21,58 @@ export function SignUpForm({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<"div">) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [repeatPassword, setRepeatPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const hydrated = useHydrated();
   const router = useRouter();
 
-  const handleSignUp = async (e: React.FormEvent) => {
+  // The fields are uncontrolled and read from FormData on submit. Controlled
+  // inputs would discard anything typed before hydration, which is a real
+  // race for fast typists and for anything automating the browser.
+  const handleSignUp = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const supabase = createClient();
-    setIsLoading(true);
+    const form = new FormData(e.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+    const repeatPassword = String(form.get("repeat-password") ?? "");
+    const team = String(form.get("team-name") ?? "").trim();
+
     setError(null);
 
     if (password !== repeatPassword) {
       setError("Passwords do not match");
-      setIsLoading(false);
+      return;
+    }
+    if (!team) {
+      setError("Enter the team you're joining");
       return;
     }
 
+    const supabase = createClient();
+    setIsLoading(true);
+
     try {
-      const { error } = await supabase.auth.signUp({
+      // The team name is read by the signup trigger, which joins the named
+      // team or creates it. No invite, no approval.
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/protected`,
+          emailRedirectTo: `${window.location.origin}/incidents`,
+          data: { team_name: team },
         },
       });
       if (error) throw error;
-      router.push("/auth/sign-up-success");
+
+      if (data.session) {
+        // Confirmations are off, so the session is already live — send them
+        // straight into the desk rather than to a "check your email" page for
+        // a mail that was never sent.
+        router.push("/incidents");
+        router.refresh();
+      } else {
+        router.push("/auth/sign-up-success");
+      }
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {
@@ -61,7 +85,9 @@ export function SignUpForm({
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl">Sign up</CardTitle>
-          <CardDescription>Create a new account</CardDescription>
+          <CardDescription>
+            Create an account and join your team&apos;s incident desk
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSignUp}>
@@ -70,12 +96,28 @@ export function SignUpForm({
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
+                  name="email"
                   type="email"
                   placeholder="m@example.com"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  data-testid="signup-email"
                 />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="team-name">Team</Label>
+                <Input
+                  id="team-name"
+                  name="team-name"
+                  type="text"
+                  placeholder="Northwind NOC"
+                  required
+                  maxLength={80}
+                  data-testid="signup-team-name"
+                />
+                <p className="text-xs text-muted-foreground">
+                  You&apos;ll join this team if it already exists, or create it
+                  if it doesn&apos;t.
+                </p>
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center">
@@ -83,10 +125,10 @@ export function SignUpForm({
                 </div>
                 <Input
                   id="password"
+                  name="password"
                   type="password"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  data-testid="signup-password"
                 />
               </div>
               <div className="grid gap-2">
@@ -95,14 +137,23 @@ export function SignUpForm({
                 </div>
                 <Input
                   id="repeat-password"
+                  name="repeat-password"
                   type="password"
                   required
-                  value={repeatPassword}
-                  onChange={(e) => setRepeatPassword(e.target.value)}
+                  data-testid="signup-repeat-password"
                 />
               </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <Button type="submit" className="w-full" disabled={isLoading}>
+              {error && (
+                <p className="text-sm text-red-500" data-testid="signup-error">
+                  {error}
+                </p>
+              )}
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={isLoading || !hydrated}
+                data-testid="signup-submit"
+              >
                 {isLoading ? "Creating an account..." : "Sign up"}
               </Button>
             </div>

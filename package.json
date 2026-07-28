@@ -5,6 +5,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "test:isolation": "node --env-file-if-exists=.env --test tests/isolation.test.mjs",
     "factory": "node harness/src/cli.ts",
     "factory:typecheck": "tsc -p harness"
   },

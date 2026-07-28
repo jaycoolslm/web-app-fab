@@ -9,16 +9,64 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { hasAuthEnvVar } from './config.ts';
+import { DEV_PORT, hasAuthEnvVar, SUPABASE_MCP_URL } from './config.ts';
+import { runShell } from './executor.ts';
 import { readState, runProgramme, runsDir } from './pipeline.ts';
-import { listProgrammes, loadProgramme } from './programme.ts';
+import { listProgrammes, loadProgramme, PROJECT_ROOT } from './programme.ts';
 
 const sh = (cmd: string, args: string[]): boolean => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 /** `command -v <bin>` is a bash builtin, not always a standalone binary on PATH — run it through bash. */
 const onPath = (bin: string): boolean => sh('bash', ['-lc', `command -v ${bin}`]);
 
-function doctor(): number {
+/** Something is listening and speaking HTTP. Any status counts; only a refused connection is down. */
+const httpUp = async (url: string): Promise<boolean> => {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(3000) });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Whether we could bind the port ourselves — the only reliable "is it free" test. */
+const portFree = (port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => server.close(() => resolve(true)));
+    server.listen(port, '127.0.0.1');
+  });
+
+/**
+ * The services that must be up (and the port that must be ours) before a run starts, checked
+ * by both `doctor` and `run`. Supabase because the agents' MCP config points at it; port
+ * {@link DEV_PORT} because the harness boots the workspace's dev server there — if your own
+ * `npm run dev` already holds it, the agents would silently drive that app instead.
+ */
+async function serviceChecks(): Promise<{ passed: boolean; label: string; fix: string }[]> {
+  const gitStatus = await runShell('git status --porcelain', PROJECT_ROOT, 60_000);
+  return [
+    {
+      passed: await httpUp(SUPABASE_MCP_URL),
+      label: 'supabase up (54321)',
+      fix: 'npx supabase start',
+    },
+    {
+      passed: await portFree(DEV_PORT),
+      label: `port ${DEV_PORT} free`,
+      fix: `stop whatever holds it (your own 'npm run dev'?) — the harness needs ${DEV_PORT} for the app`,
+    },
+    {
+      passed: gitStatus.ok && gitStatus.output.trim() === '',
+      label: 'git tree clean',
+      fix: 'commit or stash first — the harness builds in this repo, on a factory/<programme> branch',
+    },
+  ];
+}
+
+async function doctor(): Promise<number> {
   let ok = true;
   const check = (hard: boolean, passed: boolean, label: string, fix: string): void => {
     if (passed) console.log(`  ✓ ${label}`);
@@ -35,6 +83,7 @@ function doctor(): number {
     'auth env var set',
     "optional — 'claude login' works fine too; export CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY only if you want key-based auth"
   );
+  for (const c of await serviceChecks()) check(true, c.passed, c.label, c.fix);
   console.log(ok ? '==> ready' : '==> fix the ✗ items above');
   return ok ? 0 : 1;
 }
@@ -44,8 +93,7 @@ function status(): void {
   const rows: string[][] = [];
   for (const programme of existsSync(dir) ? readdirSync(dir).sort() : []) {
     const progDir = join(dir, programme);
-    if (!existsSync(join(progDir, 'workspace'))) continue;
-    for (const slug of readdirSync(progDir).filter((d) => d !== 'workspace').sort()) {
+    for (const slug of readdirSync(progDir).sort()) {
       const s = readState(programme, slug);
       const last = s?.verdicts[s.verdicts.length - 1];
       rows.push([programme, slug, s?.status ?? '?', String(s?.passCount ?? 0), last ? `${last.verdict} @ ${last.stage}` : '-']);
@@ -66,6 +114,16 @@ async function run(names: string[]): Promise<number> {
     return 1;
   }
   const programmes = names.map(loadProgramme); // fail fast on any bad manifest
+
+  // Preflight: the agents' MCP servers are HTTP endpoints they connect to at spawn, so the
+  // services behind them have to be up before the first Generator starts, not after.
+  const failures = (await serviceChecks()).filter((c) => !c.passed);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f.label.padEnd(32)} fix: ${f.fix}`);
+    console.error('==> not starting; the agents need these before GENERATE');
+    return 1;
+  }
+
   let failed = false;
   for (const programme of programmes) {
     const result = await runProgramme(programme);
@@ -96,7 +154,7 @@ switch (cmd) {
     status();
     break;
   case 'doctor':
-    process.exitCode = doctor();
+    process.exitCode = await doctor();
     break;
   case 'clean':
     rmSync(runsDir(), { recursive: true, force: true });

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "http://localhost:54321/mcp"
+    },
+    "nextjs": {
+      "type": "http",
+      "url": "http://localhost:3000/_next/mcp"
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
+    }
+  }
+}

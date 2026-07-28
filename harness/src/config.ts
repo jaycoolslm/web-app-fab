@@ -11,14 +11,24 @@ export const MAX_PASSES: number = int(process.env.HARNESS_MAX_PASSES, 3);
 /** Per-stage wall clock, seconds. A hung agent is killed, not waited on. */
 export const STAGE_TIMEOUT_MS: number = int(process.env.HARNESS_STAGE_TIMEOUT_S, 1800) * 1000;
 
-/** How long an app container gets to answer HTTP after boot. */
+/** How long an app gets to answer HTTP after boot. */
 export const APP_READY_TIMEOUT_MS: number = int(process.env.HARNESS_APP_READY_S, 90) * 1000;
 
+/**
+ * Port the workspace's Next dev server listens on. Not configurable per programme: the MCP
+ * server sets in mcp/*.json name this port literally (`localhost:3000/_next/mcp`), so the two
+ * would silently diverge. The harness owns it for the length of a run — see the `run` preflight.
+ */
+export const DEV_PORT = 3000;
+
+/** Local Supabase's MCP endpoint, from `npx supabase start`. Checked by doctor and the preflight. */
+export const SUPABASE_MCP_URL = 'http://localhost:54321/mcp';
+
 /** Model for pass 1 and for the Evaluator. */
-export const DEFAULT_MODEL: string = process.env.HARNESS_MODEL ?? 'opus';
+export const DEFAULT_MODEL: string = process.env.HARNESS_MODEL ?? 'claude-opus-5';
 
 /** Cheaper model for Generator fix passes (pass ≥ 2). */
-export const FIX_MODEL: string = process.env.HARNESS_FIX_MODEL ?? 'sonnet';
+export const FIX_MODEL: string = process.env.HARNESS_FIX_MODEL ?? 'claude-sonnet-5';
 
 /**
  * Whether an API-key-style auth env var is set. Optional: `claude` also works off a local

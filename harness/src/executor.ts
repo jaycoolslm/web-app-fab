@@ -82,6 +82,11 @@ export interface AgentRequest {
   outDir: string;
   /** Host path the full stream-json trace is written to. */
   tracePath: string;
+  /**
+   * Path to this stage's MCP server set. Passed with --strict-mcp-config so the repo's own
+   * .mcp.json never leaks in — that is the only thing keeping playwright out of the Generator.
+   */
+  mcpConfig: string;
   timeoutMs: number;
 }
 
@@ -94,6 +99,7 @@ export async function runAgent(req: AgentRequest): Promise<AgentResult> {
     'claude',
     [
       '-p', req.prompt, '--model', req.model,
+      '--mcp-config', req.mcpConfig, '--strict-mcp-config',
       '--dangerously-skip-permissions', '--verbose', '--output-format', 'stream-json',
     ],
     {
@@ -161,24 +167,29 @@ export async function startDetached(command: string, workspace: string): Promise
   }
 }
 
-/** Stop an app started by {@link startDetached} by killing its process. */
+/**
+ * Stop an app started by {@link startDetached}. Signals the whole process *group* (negative
+ * pid — the child is spawned detached, so it leads its own group): `bash -lc "npm run dev"`
+ * puts the real server two levels down, and killing only the wrapper would orphan it still
+ * holding the port, so the next pass's boot would hit EADDRINUSE.
+ */
 export function stopApp(name: string): void {
   const pid = appPids.get(name);
   if (pid === undefined) return;
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(-pid, 'SIGTERM');
   } catch {
     /* already gone */
   }
   appPids.delete(name);
 }
 
-/** Whether the app process is still running (a crashed app stops being). */
+/** Whether anything in the app's process group is still running (a crashed app stops being). */
 export const appRunning = async (name: string): Promise<boolean> => {
   const pid = appPids.get(name);
   if (pid === undefined) return false;
   try {
-    process.kill(pid, 0);
+    process.kill(-pid, 0);
     return true;
   } catch {
     return false;

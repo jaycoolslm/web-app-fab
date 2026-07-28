@@ -11,9 +11,12 @@ import { parse } from 'yaml';
 
 export const HARNESS_ROOT: string = join(import.meta.dirname, '..');
 
+/** The repo root — also the base Next + Supabase scaffold every workspace is seeded from. */
+export const PROJECT_ROOT: string = join(HARNESS_ROOT, '..');
+
 export interface AppSpec {
   label: string;
-  /** Shell command that boots the app inside its own container (cwd /workspace). */
+  /** Shell command that boots the app; cwd is the repo root. */
   command: string;
   /** Port the app serves on; readiness = an HTTP response on it. */
   port: number;
@@ -21,7 +24,7 @@ export interface AppSpec {
 
 export interface AssertSpec {
   label: string;
-  /** Shell command run inside a container (cwd /workspace); non-zero exit = finding. */
+  /** Shell command run with the repo root as cwd; non-zero exit = finding. */
   command: string;
 }
 

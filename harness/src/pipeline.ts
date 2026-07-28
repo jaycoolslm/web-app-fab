@@ -7,16 +7,20 @@
  * GENERATE with synthetic findings, never spending an Evaluator run on a broken build.
  * findings.json is the verdict; state.json is the resume/skip source of truth. Nothing in
  * a pass-N/ directory is ever overwritten — resuming continues at pass N+1.
+ *
+ * The repo itself is the workspace: it is already the Next + Supabase scaffold with
+ * node_modules installed, so a programme gets a `factory/<name>` branch rather than a copy,
+ * and every pass ends in a commit on it. Only run artifacts live under runs/.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startApps } from './apps.ts';
+import { DEV_APP, startApps } from './apps.ts';
 import { MAX_PASSES, resolveGenerateModel, DEFAULT_MODEL, STAGE_TIMEOUT_MS } from './config.ts';
-import { runAgent, runShell } from './executor.ts';
+import { runAgent, runShell, type AgentResult } from './executor.ts';
 import type { Finding, FindingsFile, Verdict } from './findings.ts';
 import { openFindingIds, readFindings, syntheticFinding, writeFindings } from './findings.ts';
-import { HARNESS_ROOT, type Programme } from './programme.ts';
+import { HARNESS_ROOT, PROJECT_ROOT, type Programme } from './programme.ts';
 
 export interface SliceState {
   slug: string;
@@ -44,6 +48,29 @@ function writeState(state: SliceState): void {
 
 const prompt = (name: string): string => readFileSync(join(HARNESS_ROOT, 'prompts', `${name}.md`), 'utf8');
 
+/** Per-stage MCP server set — the Generator and the Evaluator get different ones. */
+const mcpConfig = (stage: 'generator' | 'evaluator'): string => join(HARNESS_ROOT, 'mcp', `${stage}.json`);
+
+/** A git command in the repo. Throws on non-zero exit. */
+async function git(args: string): Promise<string> {
+  const res = await runShell(`git ${args}`, PROJECT_ROOT, 60_000);
+  if (!res.ok) throw new Error(`git ${args} failed:\n${res.output}`);
+  return res.output.trim();
+}
+
+/**
+ * Put the repo on this programme's branch. The repo *is* the workspace — it's already the Next
+ * + Supabase scaffold with node_modules installed, so a programme needs a branch, not a copy.
+ * An existing branch is resumed; otherwise it's cut from wherever HEAD is.
+ */
+async function checkoutProgrammeBranch(programmeName: string): Promise<string> {
+  const branch = `factory/${programmeName}`;
+  const exists = (await runShell(`git rev-parse --verify --quiet ${branch}`, PROJECT_ROOT, 60_000)).ok;
+  await git(exists ? `checkout ${branch}` : `checkout -b ${branch}`);
+  console.log(`[${programmeName}] branch ${branch}${exists ? ' (resuming)' : ' (new)'}`);
+  return branch;
+}
+
 function paramsBlock(opts: { pass: number; spec: string; outDir: string; appLines: string[]; previous?: FindingsFile }): string {
   return [
     '\n\n## Run parameters (from the harness)\n',
@@ -61,10 +88,14 @@ function paramsBlock(opts: { pass: number; spec: string; outDir: string; appLine
     .join('\n');
 }
 
-/** Run one slice to PASS or MAX_PASSES. Resumes after the last recorded pass. */
+/**
+ * Run one slice to PASS or MAX_PASSES. Resumes after the last recorded pass. `workspace` is
+ * the repo root — the cwd every agent, assert and app runs in.
+ */
 export async function runSlice(programme: Programme, specPath: string, workspace: string): Promise<SliceState> {
   const slug = specPath.split('/').pop()!.replace(/\.md$/, '');
   const spec = readFileSync(specPath, 'utf8');
+  const appSpecs = [DEV_APP, ...programme.apps];
   const state: SliceState = readState(programme.name, slug) ?? {
     slug,
     programme: programme.name,
@@ -86,30 +117,55 @@ export async function runSlice(programme: Programme, specPath: string, workspace
     mkdirSync(dir, { recursive: true });
     const previous = pass > 1 ? readFindings(join(passDir(programme.name, slug, pass - 1), 'findings.json')) : undefined;
 
-    const finish = (stage: string, verdict: Verdict, findings: Finding[]): boolean => {
+    const finish = async (stage: string, verdict: Verdict, findings: Finding[]): Promise<boolean> => {
       writeFindings(join(dir, 'findings.json'), { pass, verdict, findings });
       history.push(findings.filter((f) => f.status === 'open').map((f) => f.id));
       state.passCount = pass;
       state.verdicts.push({ pass, verdict, stage, openFindingIds: history[history.length - 1] });
       state.status = verdict === 'PASS' ? 'passed' : pass === MAX_PASSES ? 'failed' : 'running';
       writeState(state);
+      // One commit per pass, on the programme's branch. This is what makes the branch mean
+      // anything: each pass is a reviewable diff, and the next programme can start from a
+      // clean tree instead of inheriting this one's uncommitted edits.
+      await git('add -A');
+      if ((await runShell('git diff --cached --quiet', PROJECT_ROOT, 60_000)).ok) {
+        console.log(`[${slug}]   nothing to commit for pass ${pass}`);
+      } else {
+        await git(`commit -m "factory(${programme.name}/${slug}): pass ${pass} ${verdict} @ ${stage}"`);
+      }
       return verdict === 'PASS';
     };
 
-    // GENERATE
+    // GENERATE — apps come up first. `claude` connects to its MCP servers when it spawns, so
+    // an HTTP one (nextjs, supabase) that starts mid-turn is never seen; the Generator only
+    // gets the nextjs tools if the dev server is already listening. Best effort: a workspace
+    // too broken to boot is precisely what the Generator is here to fix, so a failure here is
+    // logged, not fatal — SMOKE is where a dead app becomes a finding.
+    const genApps = await startApps(appSpecs, workspace);
+    if (genApps.failures.length > 0) {
+      const labels = genApps.failures.map((f) => f.label).join(', ');
+      console.log(`[${slug}]   ${labels} not up for GENERATE — continuing without its MCP tools`);
+    }
     const model = resolveGenerateModel(pass, history);
     console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: GENERATE (${model})`);
-    const gen = await runAgent({
-      prompt: prompt('generator') + paramsBlock({ pass, spec, outDir: dir, appLines: [], previous }),
-      model,
-      workspace,
-      outDir: dir,
-      tracePath: join(dir, 'generate.jsonl'),
-      timeoutMs: STAGE_TIMEOUT_MS,
-    });
+    let gen: AgentResult;
+    try {
+      gen = await runAgent({
+        prompt: prompt('generator') + paramsBlock({ pass, spec, outDir: dir, appLines: genApps.running.map((a) => `${a.label}: ${a.url}`), previous }),
+        model,
+        workspace,
+        outDir: dir,
+        tracePath: join(dir, 'generate.jsonl'),
+        mcpConfig: mcpConfig('generator'),
+        timeoutMs: STAGE_TIMEOUT_MS,
+      });
+    } finally {
+      // Stopped before ASSERT: `next build` cannot take .next/lock while a dev server holds it.
+      genApps.stopAll();
+    }
     if (gen.isError) {
       console.log(`[${slug}]   generator failed: ${gen.result.slice(0, 200)}`);
-      if (finish('generate', 'FAIL', [syntheticFinding('Generator failed', gen.result)])) return state;
+      if (await finish('generate', 'FAIL', [syntheticFinding('Generator failed', gen.result)])) return state;
       continue;
     }
 
@@ -122,17 +178,18 @@ export async function runSlice(programme: Programme, specPath: string, workspace
     }
     if (assertFindings.length > 0) {
       console.log(`[${slug}]   ${assertFindings.length} assert(s) failed — looping`);
-      if (finish('assert', 'FAIL', assertFindings)) return state;
+      if (await finish('assert', 'FAIL', assertFindings)) return state;
       continue;
     }
 
-    // SMOKE — boot every declared app; a dead app never reaches the Evaluator.
-    const apps = await startApps(programme.apps, workspace);
+    // SMOKE — reboot every app against the code the Generator just wrote (and the deps ASSERT
+    // just installed); a dead app never reaches the Evaluator.
+    const apps = await startApps(appSpecs, workspace);
     try {
       if (apps.failures.length > 0) {
         console.log(`[${slug}]   ${apps.failures.length} app(s) failed to boot — looping`);
         const findings = apps.failures.map((f) => syntheticFinding(`App failed to boot: ${f.label}`, f.detail));
-        if (finish('smoke', 'FAIL', findings)) return state;
+        if (await finish('smoke', 'FAIL', findings)) return state;
         continue;
       }
 
@@ -145,17 +202,18 @@ export async function runSlice(programme: Programme, specPath: string, workspace
         workspace,
         outDir: dir,
         tracePath: join(dir, 'evaluate.jsonl'),
+        mcpConfig: mcpConfig('evaluator'),
         timeoutMs: STAGE_TIMEOUT_MS,
       });
       const written = readFindings(join(dir, 'findings.json'));
       if (evalRes.isError || !written) {
         const why = evalRes.isError ? evalRes.result : 'no valid findings.json written';
         console.log(`[${slug}]   evaluator failed: ${why.slice(0, 200)}`);
-        if (finish('evaluate', 'FAIL', [syntheticFinding('Evaluator failed', why)])) return state;
+        if (await finish('evaluate', 'FAIL', [syntheticFinding('Evaluator failed', why)])) return state;
         continue;
       }
       console.log(`[${slug}]   verdict: ${written.verdict} (${written.findings.length} finding(s))`);
-      if (finish('evaluate', written.verdict, written.findings)) return state;
+      if (await finish('evaluate', written.verdict, written.findings)) return state;
     } finally {
       apps.stopAll();
     }
@@ -165,8 +223,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
 
 /** Run a programme's specs strictly in order; a failed slice stops the ones after it. */
 export async function runProgramme(programme: Programme): Promise<{ passed: string[]; failed: string[] }> {
-  const workspace = join(runsDir(), programme.name, 'workspace');
-  mkdirSync(workspace, { recursive: true });
+  await checkoutProgrammeBranch(programme.name);
   const passed: string[] = [];
   const failed: string[] = [];
 
@@ -177,7 +234,7 @@ export async function runProgramme(programme: Programme): Promise<{ passed: stri
       passed.push(slug);
       continue;
     }
-    const state = await runSlice(programme, specPath, workspace);
+    const state = await runSlice(programme, specPath, PROJECT_ROOT);
     if (state.status === 'passed') {
       passed.push(slug);
     } else {

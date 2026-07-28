@@ -8,8 +8,13 @@ const int = (v: string | undefined, fallback: number): number => (v ? Number(v) 
 /** Max generate→evaluate passes per slice before giving up. */
 export const MAX_PASSES: number = int(process.env.HARNESS_MAX_PASSES, 3);
 
-/** Per-stage wall clock, seconds. A hung agent is killed, not waited on. */
-export const STAGE_TIMEOUT_MS: number = int(process.env.HARNESS_STAGE_TIMEOUT_S, 1800) * 1000;
+/**
+ * Per-stage wall clock, seconds. A hung agent is killed, not waited on — but the bound is
+ * generous on purpose: a slice worth one spec routinely runs a migration, a browser drive and
+ * an isolation suite, and killing that mid-flight commits a half-applied tree the next pass has
+ * to reconcile before it can make progress. Cheaper to wait than to loop on wreckage.
+ */
+export const STAGE_TIMEOUT_MS: number = int(process.env.HARNESS_STAGE_TIMEOUT_S, 7200) * 1000;
 
 /** How long an app gets to answer HTTP after boot. */
 export const APP_READY_TIMEOUT_MS: number = int(process.env.HARNESS_APP_READY_S, 90) * 1000;

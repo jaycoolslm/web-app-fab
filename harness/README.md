@@ -57,7 +57,7 @@ npm run factory -- clean                  # delete all runs
 npm run factory:typecheck
 ```
 
-Environment knobs: `HARNESS_MODEL` (default `claude-opus-5`), `HARNESS_FIX_MODEL` (`claude-sonnet-5`), `HARNESS_MAX_PASSES` (`3`), `HARNESS_STAGE_TIMEOUT_S` (`1800`), `HARNESS_APP_READY_S` (`90`).
+Environment knobs: `HARNESS_MODEL` (default `claude-opus-5`), `HARNESS_FIX_MODEL` (`claude-sonnet-5`), `HARNESS_MAX_PASSES` (`3`), `HARNESS_STAGE_TIMEOUT_S` (`7200`), `HARNESS_APP_READY_S` (`90`).
 
 ## Programmes
 

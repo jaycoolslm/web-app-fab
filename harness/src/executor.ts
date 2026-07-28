@@ -26,11 +26,22 @@ interface Collected {
   timedOut: boolean;
 }
 
-/** Spawn a command, kill it on timeout, collect output. */
+/**
+ * Spawn a command, kill it on timeout, collect output.
+ *
+ * `tee` mirrors both streams to a file *as they arrive*, so a long stage is `tail -f`-able while
+ * it runs rather than only readable once it returns. stdout and stderr interleave into the one
+ * file — same as the combined string callers already get back, and the right shape for a build log.
+ */
 function collect(
   command: string,
   args: string[],
-  opts: { timeoutMs: number; cwd?: string; onStdoutLine?: (line: string) => void }
+  opts: {
+    timeoutMs: number;
+    cwd?: string;
+    onStdoutLine?: (line: string) => void;
+    tee?: { path: string; header: string };
+  }
 ): Promise<Collected> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd });
@@ -38,6 +49,21 @@ function collect(
     let stderr = '';
     let pending = '';
     let timedOut = false;
+    const started = Date.now();
+    const tee = opts.tee ? createWriteStream(opts.tee.path) : undefined;
+    if (tee) tee.write(`$ ${opts.tee!.header}\n\n`);
+    /**
+     * Footer, so the file says how it ended without you having to infer it from the tail. Guarded:
+     * a failed spawn emits `error` *and then* `close`, and writing after end would surface as an
+     * unhandled stream error rather than the spawn failure we actually want to report.
+     */
+    let teeDone = false;
+    const endTee = (status: string): void => {
+      if (!tee || teeDone) return;
+      teeDone = true;
+      tee.write(`\n${status} — elapsed ${Math.round((Date.now() - started) / 1000)}s\n`);
+      tee.end();
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');
@@ -45,6 +71,7 @@ function collect(
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       stdout += text;
+      tee?.write(text);
       if (opts.onStdoutLine) {
         pending += text;
         const lines = pending.split('\n');
@@ -52,14 +79,23 @@ function collect(
         for (const line of lines) opts.onStdoutLine(line);
       }
     });
-    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderr += text;
+      tee?.write(text);
+    });
     child.on('error', (err) => {
       clearTimeout(timer);
+      endTee(`spawn failed: ${err.message}`);
       resolve({ code: null, stdout, stderr: `${stderr}\n${err.message}`, timedOut });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
       if (pending && opts.onStdoutLine) opts.onStdoutLine(pending);
+      // Elapsed can exceed the timeout: SIGKILL lands on the `bash -lc` wrapper, and an orphaned
+      // grandchild holding the stdout pipe keeps `close` from firing until it exits. Reporting both
+      // numbers makes that visible instead of quietly implying the stage stopped at the limit.
+      endTee(timedOut ? `killed: exceeded ${opts.timeoutMs / 1000}s timeout` : `exit ${code}`);
       resolve({ code, stdout, stderr, timedOut });
     });
   });
@@ -130,15 +166,21 @@ export async function runAgent(req: AgentRequest): Promise<AgentResult> {
   return { isError: true, result: `agent produced no result event (exit ${code}): ${stderr.slice(-1500)}` };
 }
 
-/** Run a one-shot shell command in the workspace. */
+/**
+ * Run a one-shot shell command in the workspace. `logPath` tees the run to that file live (see
+ * {@link collect}); omit it for the short internal calls (git, preflight) that would just litter
+ * the run directory.
+ */
 export async function runShell(
   command: string,
   workspace: string,
-  timeoutMs: number
+  timeoutMs: number,
+  opts: { logPath?: string } = {}
 ): Promise<{ ok: boolean; output: string }> {
   const { code, stdout, stderr, timedOut } = await collect('bash', ['-lc', command], {
     timeoutMs,
     cwd: workspace,
+    tee: opts.logPath ? { path: opts.logPath, header: command } : undefined,
   });
   const combined = `${stdout}${stderr}`;
   const output = timedOut ? `(timed out after ${timeoutMs / 1000}s)\n${combined}` : combined;

@@ -51,6 +51,13 @@ const prompt = (name: string): string => readFileSync(join(HARNESS_ROOT, 'prompt
 /** Per-stage MCP server set — the Generator and the Evaluator get different ones. */
 const mcpConfig = (stage: 'generator' | 'evaluator'): string => join(HARNESS_ROOT, 'mcp', `${stage}.json`);
 
+/**
+ * An assert label as a filename fragment: `isolation tests` → `isolation-tests`. Labels come from
+ * a programme's yaml, so a space or a slash in one would otherwise decide where the log gets written.
+ */
+const slugify = (label: string): string =>
+  label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'assert';
+
 /** A git command in the repo. Throws on non-zero exit. */
 async function git(args: string): Promise<string> {
   const res = await runShell(`git ${args}`, PROJECT_ROOT, 60_000);
@@ -169,11 +176,17 @@ export async function runSlice(programme: Programme, specPath: string, workspace
       continue;
     }
 
-    // ASSERT — deterministic, no model, loops back without spending the Evaluator.
+    // ASSERT — deterministic, no model, loops back without spending the Evaluator. Each rule tees
+    // to pass-N/assert-<label>.log whether it passes or fails: the failure path already feeds its
+    // output to the next Generator as a finding, but a *green* build left no evidence at all, and
+    // the console only ever gets the one-line stage header. The log is for you, the finding is for
+    // the agent — same bytes, different readers.
     const assertFindings: Finding[] = [];
     for (const rule of programme.asserts) {
       console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: ASSERT ${rule.label}`);
-      const res = await runShell(rule.command, workspace, STAGE_TIMEOUT_MS);
+      const res = await runShell(rule.command, workspace, STAGE_TIMEOUT_MS, {
+        logPath: join(dir, `assert-${slugify(rule.label)}.log`),
+      });
       if (!res.ok) assertFindings.push(syntheticFinding(`Assert failed: ${rule.label}`, `$ ${rule.command}\n${res.output}`));
     }
     if (assertFindings.length > 0) {

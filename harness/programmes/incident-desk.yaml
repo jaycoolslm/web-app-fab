@@ -19,7 +19,11 @@ asserts:
 # No `apps:` — the harness always boots the workspace's Next dev server on 3000, which is what
 # the nextjs MCP server attaches to and what the Evaluator drives with playwright.
 
-specs: # basenames under specs/, delivered strictly in order
+# Basenames under specs/, delivered strictly in order. `ux: true` adds the EVALUATE_UX stage to
+# a slice's passes; foundation is auth, schema and RLS with nothing worth a vision pass looking at.
+specs:
   - incident-desk-foundation.md
-  - incident-desk-board.md
-  - incident-desk-assignment.md
+  - spec: incident-desk-board.md
+    ux: true
+  - spec: incident-desk-assignment.md
+    ux: true

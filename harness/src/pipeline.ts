@@ -1,10 +1,15 @@
 /**
  * The pass loop. Per slice (one spec), each pass runs
  *
- *   GENERATE → ASSERT → SMOKE → EVALUATE
+ *   GENERATE → ASSERT → SMOKE → EVALUATE → EVALUATE_UX
  *
  * where ASSERT (deterministic commands) and SMOKE (app boots) short-circuit back to
  * GENERATE with synthetic findings, never spending an Evaluator run on a broken build.
+ * EVALUATE_UX short-circuits the same way from the other end: it is skipped when the
+ * functional verdict is already FAIL (the build is going back to the Generator regardless)
+ * or when the slice isn't flagged `ux: true` in the manifest, so vision spend only lands on
+ * a correct build that actually renders UI.
+ *
  * findings.json is the verdict; state.json is the resume/skip source of truth. Nothing in
  * a pass-N/ directory is ever overwritten — resuming continues at pass N+1.
  *
@@ -16,18 +21,32 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEV_APP, startApps } from './apps.ts';
-import { MAX_PASSES, resolveGenerateModel, DEFAULT_MODEL, STAGE_TIMEOUT_MS } from './config.ts';
+import { MAX_PASSES, resolveGenerateModel, DEFAULT_MODEL, STAGE_TIMEOUT_MS, UX_STAGE_TIMEOUT_MS } from './config.ts';
 import { runAgent, runShell, type AgentResult } from './executor.ts';
 import type { Finding, FindingsFile, Verdict } from './findings.ts';
-import { openFindingIds, readFindings, syntheticFinding, writeFindings } from './findings.ts';
-import { HARNESS_ROOT, PROJECT_ROOT, type Programme } from './programme.ts';
+import {
+  escalationHistory,
+  FN_PREFIX,
+  mergeVerdict,
+  namespaceIds,
+  openFindingIds,
+  readFindings,
+  readUxFindings,
+  syntheticFinding,
+  UX_PREFIX,
+  writeFindings,
+} from './findings.ts';
+import { HARNESS_ROOT, PROJECT_ROOT, type Programme, type SpecEntry } from './programme.ts';
+
+/** The stage a verdict came from. State written before EVALUATE_UX existed only holds the rest. */
+export type Stage = 'generate' | 'assert' | 'smoke' | 'evaluate' | 'evaluate-ux';
 
 export interface SliceState {
   slug: string;
   programme: string;
   status: 'running' | 'passed' | 'failed';
   passCount: number;
-  verdicts: { pass: number; verdict: Verdict; stage: string; openFindingIds: string[] }[];
+  verdicts: { pass: number; verdict: Verdict; stage: Stage; openFindingIds: string[] }[];
 }
 
 export const runsDir = (): string => join(HARNESS_ROOT, 'runs');
@@ -48,8 +67,12 @@ function writeState(state: SliceState): void {
 
 const prompt = (name: string): string => readFileSync(join(HARNESS_ROOT, 'prompts', `${name}.md`), 'utf8');
 
-/** Per-stage MCP server set — the Generator and the Evaluator get different ones. */
-const mcpConfig = (stage: 'generator' | 'evaluator'): string => join(HARNESS_ROOT, 'mcp', `${stage}.json`);
+/** A slice's run-state directory name, from its spec filename. */
+const sliceSlug = (slice: SpecEntry): string => slice.path.split('/').pop()!.replace(/\.md$/, '');
+
+/** Per-stage MCP server set — every agent stage gets its own. */
+const mcpConfig = (stage: 'generator' | 'evaluator' | 'evaluator-ux'): string =>
+  join(HARNESS_ROOT, 'mcp', `${stage}.json`);
 
 /** A git command in the repo. Throws on non-zero exit. */
 async function git(args: string): Promise<string> {
@@ -92,9 +115,9 @@ function paramsBlock(opts: { pass: number; spec: string; outDir: string; appLine
  * Run one slice to PASS or MAX_PASSES. Resumes after the last recorded pass. `workspace` is
  * the repo root — the cwd every agent, assert and app runs in.
  */
-export async function runSlice(programme: Programme, specPath: string, workspace: string): Promise<SliceState> {
-  const slug = specPath.split('/').pop()!.replace(/\.md$/, '');
-  const spec = readFileSync(specPath, 'utf8');
+export async function runSlice(programme: Programme, slice: SpecEntry, workspace: string): Promise<SliceState> {
+  const slug = sliceSlug(slice);
+  const spec = readFileSync(slice.path, 'utf8');
   const appSpecs = [DEV_APP, ...programme.apps];
   const state: SliceState = readState(programme.name, slug) ?? {
     slug,
@@ -117,7 +140,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
     mkdirSync(dir, { recursive: true });
     const previous = pass > 1 ? readFindings(join(passDir(programme.name, slug, pass - 1), 'findings.json')) : undefined;
 
-    const finish = async (stage: string, verdict: Verdict, findings: Finding[]): Promise<boolean> => {
+    const finish = async (stage: Stage, verdict: Verdict, findings: Finding[]): Promise<boolean> => {
       writeFindings(join(dir, 'findings.json'), { pass, verdict, findings });
       history.push(findings.filter((f) => f.status === 'open').map((f) => f.id));
       state.passCount = pass;
@@ -146,7 +169,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
       const labels = genApps.failures.map((f) => f.label).join(', ');
       console.log(`[${slug}]   ${labels} not up for GENERATE — continuing without its MCP tools`);
     }
-    const model = resolveGenerateModel(pass, history);
+    const model = resolveGenerateModel(pass, escalationHistory(history));
     console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: GENERATE (${model})`);
     let gen: AgentResult;
     try {
@@ -193,7 +216,7 @@ export async function runSlice(programme: Programme, specPath: string, workspace
         continue;
       }
 
-      // EVALUATE — the adversarial pass; writes findings.json (the verdict).
+      // EVALUATE — the adversarial correctness pass; writes findings.json.
       console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: EVALUATE (${DEFAULT_MODEL})`);
       const appLines = apps.running.map((a) => `${a.label}: ${a.url}`);
       const evalRes = await runAgent({
@@ -212,8 +235,44 @@ export async function runSlice(programme: Programme, specPath: string, workspace
         if (await finish('evaluate', 'FAIL', [syntheticFinding('Evaluator failed', why)])) return state;
         continue;
       }
-      console.log(`[${slug}]   verdict: ${written.verdict} (${written.findings.length} finding(s))`);
-      if (await finish('evaluate', written.verdict, written.findings)) return state;
+      const fnFindings = namespaceIds(written.findings, FN_PREFIX);
+      console.log(`[${slug}]   verdict: ${written.verdict} (${fnFindings.length} finding(s))`);
+
+      // EVALUATE_UX — gated. A functional FAIL is already going back to the Generator, and a
+      // slice the manifest doesn't flag `ux: true` (auth, schema, RLS) has nothing to look at;
+      // in both cases it is vision spend that cannot change the outcome.
+      if (written.verdict === 'FAIL' || !slice.ux) {
+        if (slice.ux) console.log(`[${slug}]   skipping EVALUATE_UX — functional FAIL loops first`);
+        if (await finish('evaluate', written.verdict, fnFindings)) return state;
+        continue;
+      }
+      console.log(`[${slug}] pass ${pass}/${MAX_PASSES}: EVALUATE_UX (${DEFAULT_MODEL})`);
+      mkdirSync(join(dir, 'screenshots'), { recursive: true }); // the prompt's evidence directory
+      const uxRes = await runAgent({
+        prompt: prompt('evaluator-ux') + paramsBlock({ pass, spec, outDir: dir, appLines, previous }),
+        model: DEFAULT_MODEL,
+        workspace,
+        outDir: dir,
+        tracePath: join(dir, 'evaluate-ux.jsonl'),
+        mcpConfig: mcpConfig('evaluator-ux'),
+        timeoutMs: UX_STAGE_TIMEOUT_MS,
+      });
+      const ux = readUxFindings(join(dir, 'findings-ux.json'));
+      if (uxRes.isError || !ux) {
+        // Deliberately not a FAIL. The build is functionally correct; a stage whose whole
+        // remit is cosmetic must not be able to sink it by timing out. The failure is on the
+        // console and in evaluate-ux.jsonl, and the functional verdict stands unchanged.
+        const why = uxRes.isError ? uxRes.result : 'no valid findings-ux.json written';
+        console.log(`[${slug}]   ux evaluator failed: ${why.slice(0, 200)} — verdict stands on EVALUATE`);
+        if (await finish('evaluate', written.verdict, fnFindings)) return state;
+        continue;
+      }
+      // Merge into the canonical findings.json: one file, one contract, still the only thing
+      // the Generator reads. The harness owns the merged verdict — the UX file has none.
+      const uxFindings = namespaceIds(ux.findings, UX_PREFIX);
+      const merged = mergeVerdict(written.verdict, uxFindings);
+      console.log(`[${slug}]   merged verdict: ${merged} (${fnFindings.length} functional, ${uxFindings.length} ux)`);
+      if (await finish('evaluate-ux', merged, [...fnFindings, ...uxFindings])) return state;
     } finally {
       apps.stopAll();
     }
@@ -227,14 +286,14 @@ export async function runProgramme(programme: Programme): Promise<{ passed: stri
   const passed: string[] = [];
   const failed: string[] = [];
 
-  for (const specPath of programme.specs) {
-    const slug = specPath.split('/').pop()!.replace(/\.md$/, '');
+  for (const slice of programme.specs) {
+    const slug = sliceSlug(slice);
     if (readState(programme.name, slug)?.status === 'passed') {
       console.log(`[${slug}] already passed — skipping`);
       passed.push(slug);
       continue;
     }
-    const state = await runSlice(programme, specPath, PROJECT_ROOT);
+    const state = await runSlice(programme, slice, PROJECT_ROOT);
     if (state.status === 'passed') {
       passed.push(slug);
     } else {

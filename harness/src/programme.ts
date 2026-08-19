@@ -28,12 +28,33 @@ export interface AssertSpec {
   command: string;
 }
 
+export interface SpecEntry {
+  /** Absolute path to the spec markdown. */
+  path: string;
+  /**
+   * Whether this slice renders UI worth a vision pass. Opt-in per spec (`ux: true`), because
+   * running the UX Evaluator against a slice that is only auth, schema and RLS is pure waste.
+   */
+  ux: boolean;
+}
+
 export interface Programme {
   name: string;
-  /** Absolute spec paths, delivered strictly in order. */
-  specs: string[];
+  /** Specs delivered strictly in order. */
+  specs: SpecEntry[];
   apps: AppSpec[];
   asserts: AssertSpec[];
+}
+
+/**
+ * A manifest as YAML hands it over. `specs` stays `unknown[]` because an entry is either a bare
+ * filename or a `{ spec, ux }` object — both forms are supported, so no existing manifest breaks.
+ */
+interface RawProgramme {
+  name?: string;
+  specs?: unknown[];
+  apps?: Partial<AppSpec>[];
+  asserts?: Partial<AssertSpec>[];
 }
 
 export function listProgrammes(): string[] {
@@ -50,14 +71,16 @@ export function loadProgramme(name: string): Programme {
   if (!existsSync(path)) {
     throw new Error(`no programme '${name}' (${path}) — known: ${listProgrammes().join(', ') || '(none)'}`);
   }
-  const raw = parse(readFileSync(path, 'utf8')) as Partial<Programme> | null;
+  const raw = parse(readFileSync(path, 'utf8')) as RawProgramme | null;
   if (!raw || raw.name !== name) throw new Error(`${path}: 'name' must be '${name}'`);
   if (!Array.isArray(raw.specs) || raw.specs.length === 0) throw new Error(`${path}: 'specs' must be a non-empty list`);
 
-  const specs = raw.specs.map((s) => {
-    const p = join(HARNESS_ROOT, 'specs', String(s));
+  const specs = raw.specs.map((s, i) => {
+    const entry = typeof s === 'string' ? { spec: s, ux: false } : (s as { spec?: string; ux?: boolean } | null);
+    if (!entry?.spec) throw new Error(`${path}: specs[${i}] must be a filename or { spec, ux }`);
+    const p = join(HARNESS_ROOT, 'specs', String(entry.spec));
     if (!existsSync(p)) throw new Error(`${path}: spec not found: ${p}`);
-    return p;
+    return { path: p, ux: entry.ux === true };
   });
   const apps = (raw.apps ?? []).map((a: Partial<AppSpec>, i: number) => {
     if (!a.label || !a.command || !a.port) throw new Error(`${path}: apps[${i}] needs label, command, port`);

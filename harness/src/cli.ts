@@ -10,6 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DEV_PORT, hasAuthEnvVar, SUPABASE_MCP_URL } from './config.ts';
 import { runShell } from './executor.ts';
@@ -38,6 +39,24 @@ const portFree = (port: number): Promise<boolean> =>
     server.once('listening', () => server.close(() => resolve(true)));
     server.listen(port, '127.0.0.1');
   });
+
+/**
+ * Whether `playwright install chromium` has already put a browser in the cache both Evaluators
+ * drive. Not run-blocking — the playwright MCP server downloads one on demand — but that
+ * download lands mid-pass, on the clock, in a programme meant to run unattended for hours, so
+ * doctor says so up front. PLAYWRIGHT_BROWSERS_PATH wins here exactly as it does for Playwright.
+ */
+function chromiumInstalled(): boolean {
+  const fromEnv = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const dir =
+    fromEnv ??
+    (process.platform === 'darwin'
+      ? join(homedir(), 'Library', 'Caches', 'ms-playwright')
+      : process.platform === 'win32'
+        ? join(homedir(), 'AppData', 'Local', 'ms-playwright')
+        : join(homedir(), '.cache', 'ms-playwright'));
+  return existsSync(dir) && readdirSync(dir).some((entry) => entry.startsWith('chromium'));
+}
 
 /**
  * The services that must be up (and the port that must be ours) before a run starts, checked
@@ -82,6 +101,12 @@ async function doctor(): Promise<number> {
     hasAuthEnvVar(),
     'auth env var set',
     "optional — 'claude login' works fine too; export CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY only if you want key-based auth"
+  );
+  check(
+    false,
+    chromiumInstalled(),
+    'playwright chromium installed',
+    'npx playwright install chromium — otherwise the first Evaluator pays for the download mid-run'
   );
   for (const c of await serviceChecks()) check(true, c.passed, c.label, c.fix);
   console.log(ok ? '==> ready' : '==> fix the ✗ items above');

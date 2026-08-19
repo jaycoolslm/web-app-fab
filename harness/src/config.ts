@@ -11,6 +11,13 @@ export const MAX_PASSES: number = int(process.env.HARNESS_MAX_PASSES, 3);
 /** Per-stage wall clock, seconds. A hung agent is killed, not waited on. */
 export const STAGE_TIMEOUT_MS: number = int(process.env.HARNESS_STAGE_TIMEOUT_S, 1800) * 1000;
 
+/**
+ * Wall clock for EVALUATE_UX, seconds. Deliberately shorter than the full stage budget: it is a
+ * fifth stage on every pass of a programme meant to run unattended for hours, and a bounded
+ * screenshot rubric is not the same amount of work as judging correctness.
+ */
+export const UX_STAGE_TIMEOUT_MS: number = int(process.env.HARNESS_UX_STAGE_TIMEOUT_S, 900) * 1000;
+
 /** How long an app gets to answer HTTP after boot. */
 export const APP_READY_TIMEOUT_MS: number = int(process.env.HARNESS_APP_READY_S, 90) * 1000;
 
@@ -42,6 +49,10 @@ export function hasAuthEnvVar(): boolean {
  * Generator model for a pass. Pass 1 gets the default model; fix passes get the cheap
  * model, escalating back to the default when any still-open finding id has already
  * appeared in two or more prior passes (i.e. a fix attempt failed to clear it).
+ *
+ * The caller passes `escalationHistory(...)`, not the raw history: UX ids are filtered out
+ * because a vision model naming different cosmetic nits each pass would churn the id set and
+ * escalate on noise rather than on a fix that genuinely failed.
  */
 export function resolveGenerateModel(pass: number, findingsHistory: string[][]): string {
   if (pass <= 1) return DEFAULT_MODEL;
